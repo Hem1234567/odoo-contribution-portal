@@ -1,0 +1,74 @@
+name: Contribution validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope-check:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'auto/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Validate assigned package paths
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed
+          case "$HEAD_BRANCH" in
+            auto/frontend) allowed='^frontend/' ;;
+            auto/backend) allowed='^backend/' ;;
+            auto/cobol-database) allowed='^(cobol-engine|database|infrastructure|docs|scripts|tests)/|^(package\.json|package-lock\.json|docker-compose\.yml|\.dockerignore|\.gitignore)$' ;;
+            *) echo "::error::Unrecognized contribution branch $HEAD_BRANCH"; exit 1 ;;
+          esac
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            [[ "$file" =~ $allowed ]] || { echo "::error file=$file::Outside assigned package"; exit 1; }
+          done < /tmp/changed
+
+  integration-build-test:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'integration/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install GnuCOBOL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnucobol
+      - name: Install dependencies
+        run: npm run install:all
+      - name: Build complete integrated project
+        run: npm run build
+      - name: Run backend and COBOL tests
+        run: npm test
+
+  main-build-test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install GnuCOBOL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnucobol
+      - name: Install dependencies
+        run: npm run install:all
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
